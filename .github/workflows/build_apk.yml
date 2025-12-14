@@ -29,14 +29,39 @@ jobs:
         uses: gradle/gradle-build-action@v2
         with:
           gradle-version: '8.2'
+          cache-disabled: true
           
-      - name: Clean and build debug APK
-        run: gradle clean assembleDebug --stacktrace --info
+      - name: Display Gradle version
+        run: gradle --version
+        
+      - name: List project structure
+        run: |
+          echo "Project structure:"
+          ls -la
+          echo "---"
+          if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+            echo "Root build file found"
+          fi
+          if [ -d "app" ]; then
+            echo "App directory found"
+            ls -la app/
+          fi
+          
+      - name: Clean project
+        run: gradle clean --stacktrace --info
+        continue-on-error: true
+        
+      - name: Build debug APK
+        run: gradle assembleDebug --stacktrace --info --debug
         
       - name: Verify APK creation
+        if: always()
         run: |
           echo "Searching for APK files..."
-          find . -name "*.apk" -type f
+          find . -name "*.apk" -type f || echo "No APK files found"
+          echo "---"
+          echo "Build outputs directory:"
+          find . -path "*/build/outputs/*" -type f || echo "No build outputs found"
           
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -48,3 +73,14 @@ jobs:
             **/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
           retention-days: 30
+          
+      - name: Upload build logs
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-logs
+          path: |
+            **/build/reports/
+            **/build/outputs/logs/
+          if-no-files-found: ignore
+          retention-days: 7
