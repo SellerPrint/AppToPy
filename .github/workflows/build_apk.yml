@@ -9,18 +9,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/upload-artifact@v4
+      # 1️⃣ Récupérer le code du repo
+      - uses: actions/checkout@v3
 
+      # 2️⃣ Installer les dépendances
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y python3-pip openjdk-11-jdk zip unzip
+          sudo apt install -y python3-pip openjdk-11-jdk zip unzip git
           pip install --upgrade pip
           pip install cython buildozer
 
+      # 3️⃣ Compiler l'APK
       - name: Build APK
         run: buildozer -v android debug
 
+      # 4️⃣ Vérifier la présence de l'APK
+      - name: List APK
+        run: ls -l bin/
+
+      # 5️⃣ Upload de l'APK (vérifie qu'il existe)
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
