@@ -20,7 +20,7 @@ jobs:
           pip install --upgrade pip
           pip install cython buildozer
 
-      # 3️⃣ Compiler l'APK
+      # 3️⃣ Compiler l'APK1
       - name: Build APK
         run: buildozer -v android debug
 
