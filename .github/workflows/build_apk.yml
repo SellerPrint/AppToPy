@@ -7,37 +7,63 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
-      # 1️⃣ Récupérer le code du repo
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # 2️⃣ Installer les dépendances
-      - name: Install dependencies
+      - name: Cache Buildozer directories
+        uses: actions/cache@v2
+        with:
+          path: |
+            .buildozer
+            .buildozer_global
+          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
+
+      - name: Install system dependencies
         run: |
-          sudo apt update
-          sudo apt install -y python3-pip openjdk-11-jdk zip unzip git
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev \
+            libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev libunwind-dev zlib1g-dev \
+            libsqlite3-dev sqlite3 bzip2 libbz2-dev openssl libgdbm-dev libgdbm-compat-dev liblzma-dev \
+            libreadline-dev uuid-dev gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            zip unzip autoconf libtool pkg-config libncurses5-dev libncursesw5-dev libtinfo5 \
+            cmake libffi-dev libssl-dev automake
+
+      - name: Set up Java 17 (Android build)
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      - name: Install Python dependencies
+        run: |
           pip install --upgrade pip
-          pip install cython buildozer
+          pip install buildozer cython==0.29.33
 
-      # 3️⃣ Compiler l'APK
-      - name: Build APK
-        run: buildozer -v android debug
-
-      # 4️⃣ Copier l'APK seulement s'il existe
-      - name: Prepare APK for upload
+      - name: Build APK with Buildozer
         run: |
-          mkdir -p artifact
-          if ls bin/*.apk 1> /dev/null 2>&1; then
-            cp bin/*.apk artifact/
-            echo "APK found and copied for upload."
+          yes | buildozer -v android debug
+
+      - name: Verify APK presence
+        if: always()
+        run: |
+          if compgen -G "bin/*.apk" > /dev/null; then
+            echo "APK généré : $(ls bin/*.apk)"
           else
-            echo "No APK found, skipping upload."
+            echo "::warning::Fichier APK non trouvé. La compilation a peut-être échoué."
           fi
 
-      # 5️⃣ Upload de l'APK si présent
-      - name: Upload APK
+      - name: Upload APK artifact
+        if: ${{ success() && steps['Verify APK presence'].outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: apk
-          path: artifact/*.apk
+          name: APK
+          path: bin/*.apk
