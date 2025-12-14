@@ -24,9 +24,9 @@ jobs:
       - name: Build APK
         run: buildozer -v android debug
 
-      # 4️⃣ Vérifier la présence de l'APK
+      # 4️⃣ Vérifier la présence de l'APK (ne plante pas si le dossier est absent)
       - name: List APK
-        run: ls -l bin/
+        run: ls -l bin/ || echo "bin/ not found yet"
 
       # 5️⃣ Upload de l'APK (vérifie qu'il existe)
       - name: Upload APK
