@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Récupérer le code
+      # 1️⃣ Récupérer le code du repo
       - uses: actions/checkout@v3
 
       # 2️⃣ Installer les dépendances
@@ -24,9 +24,20 @@ jobs:
       - name: Build APK
         run: buildozer -v android debug
 
-      # 4️⃣ Upload de l'APK (upload si le fichier existe)
+      # 4️⃣ Copier l'APK seulement s'il existe
+      - name: Prepare APK for upload
+        run: |
+          mkdir -p artifact
+          if ls bin/*.apk 1> /dev/null 2>&1; then
+            cp bin/*.apk artifact/
+            echo "APK found and copied for upload."
+          else
+            echo "No APK found, skipping upload."
+          fi
+
+      # 5️⃣ Upload de l'APK si présent
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: bin/*.apk
+          path: artifact/*.apk
