@@ -1,21 +1,31 @@
 [app]
-title = MonApk
-package.name = monapk
-package.domain = org.termux
-source.include_exts = py,kv
-requirements = python3,kivy
-entrypoint = main.py
+title = My Python App
+package.name = mypythonapp
+package.domain = org.test
+source.dir = .
+source.include_exts = py,png,jpg,kv,atlas,txt
+version = 1.0.0
+requirements = python3,kivy==2.1.0,android
 orientation = portrait
+osx.python_version = 3
+osx.kivy_version = 2.1.0
 fullscreen = 0
-version = 0.1
-android.permissions = INTERNET
 
 [buildozer]
 log_level = 2
-warn_on_root = 0
+warn_on_root = 1
+android.accept_sdk_license = True
 
+# Configuration Android
 [android]
-android.api = 33
-android.ndk = 25b
-android.sdk = 33
-android.minapi = 21
+api = 33
+minapi = 21
+ndk = 25b
+android.ndk_path = 
+android.sdk_path = 
+p4a.branch = develop
+p4a.source_dir = 
+android.arch = armeabi-v7a
+
+# Permissions Android (ajuste selon tes besoins)
+android.permissions = INTERNET
