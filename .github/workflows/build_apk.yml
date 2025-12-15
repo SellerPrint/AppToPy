@@ -1,188 +1,181 @@
-name: Python to APK - Robust Build
+name: Build Python APK - Fixed Error 100
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:  # Pour déclencher manuellement
 
 env:
-  # Variables pour éviter les erreurs courantes
-  USE_SDK_WRAPPER: 1
+  # Variables fixes pour Buildozer
+  BUILDOZER_HOME: /tmp/buildozer
   ANDROID_HOME: /usr/local/lib/android/sdk
-  BUILD_TOOLS_VERSION: "30.0.3"
-  TARGET_SDK: 33
-  MIN_SDK: 21
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     
-    strategy:
-      matrix:
-        python-version: ["3.9"]
-      fail-fast: false  # Continue même si une version échoue
-        
     steps:
-    - name: Checkout avec sous-modules
+    - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      
+    - name: Clean workspace
+      run: |
+        # Nettoie tout avant de commencer
+        sudo rm -rf /tmp/buildozer* 2>/dev/null || true
+        rm -rf .buildozer 2>/dev/null || true
+        rm -rf ~/.buildozer 2>/dev/null || true
         
-    - name: Setup Python
-      uses: actions/setup-python@v5
+    - name: Setup Python 3.9
+      uses: actions/setup-python@v4
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: '3.9'
         
-    - name: Install prerequisites
+    - name: Install essential dependencies
       run: |
         sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        sudo apt-get install -y \
           python3-pip \
-          python3-setuptools \
-          python3-venv \
-          git \
+          python3-dev \
           build-essential \
+          git \
+          wget \
+          unzip \
+          openjdk-17-jdk \
+          zip \
           libffi-dev \
           libssl-dev \
           libjpeg-dev \
           zlib1g-dev \
-          libfreetype6-dev \
-          liblcms2-dev \
-          libopenjp2-7-dev \
-          libtiff5-dev \
-          tk-dev \
-          libsdl2-dev \
-          libsdl2-image-dev \
-          libsdl2-mixer-dev \
-          libsdl2-ttf-dev \
-          libportmidi-dev \
-          libswscale-dev \
-          libavformat-dev \
-          libavcodec-dev \
-          libxml2-dev \
-          libxslt1-dev \
-          libgstreamer1.0-dev \
-          libgstreamer-plugins-base1.0-dev \
-          libmtdev-dev \
-          xclip \
-          xsel \
-          wget \
-          curl \
-          unzip \
-          openjdk-17-jdk \
-          ninja-build \
-          pkg-config \
-          cmake \
-          libltdl-dev \
-          libtool \
           autoconf \
-          automake
+          libtool \
+          pkg-config
         
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
       with:
-        api-level: ${{ env.TARGET_SDK }}
-        build-tools: ${{ env.BUILD_TOOLS_VERSION }}
-        ndk: "25.1.8937393"
+        api-level: 33
+        build-tools: 34.0.0
         
     - name: Create virtual environment
       run: |
         python -m venv venv
         source venv/bin/activate
-        pip install --upgrade pip setuptools wheel
+        python -m pip install --upgrade pip setuptools wheel
         
-    - name: Install Python dependencies
+    - name: Install Buildozer with specific versions
       run: |
         source venv/bin/activate
-        if [ -f "requirements.txt" ]; then
-          pip install -r requirements.txt
-        fi
-        # Installation spécifique pour Buildozer
-        pip install buildozer cython==0.29.33
-        pip install kivy[full] kivy-garden
+        # Versions spécifiques stables
+        pip install "buildozer==1.5.0"
+        pip install "cython==0.29.33"
+        pip install "kivy==2.1.0"
         
-    - name: Configure Buildozer
+    - name: Create minimal buildozer.spec
       run: |
         if [ ! -f "buildozer.spec" ]; then
           source venv/bin/activate
-          buildozer init
-          # Configuration automatique minimale
-          sed -i 's/^title = .*/title = My Python App/' buildozer.spec
-          sed -i 's/^package.name = .*/package.name = mypythonapp/' buildozer.spec
-          sed -i 's/^source.dir = .*/source.dir = ./' buildozer.spec
-          sed -i 's/^source.include_exts = .*/source.include_exts = py,png,jpg,kv,atlas,txt/' buildozer.spec
-          sed -i 's/^version = .*/version = 1.0.0/' buildozer.spec
-          sed -i 's/^requirements = .*/requirements = python3,kivy/' buildozer.spec
-          sed -i 's/^android.api = .*/android.api = 33/' buildozer.spec
-          sed -i 's/^android.minapi = .*/android.minapi = 21/' buildozer.spec
-          sed -i 's/^android.ndk = .*/android.ndk = 25b/' buildozer.spec
+          cat > buildozer.spec << 'EOF'
+[app]
+title = MyApp
+package.name = myapp
+package.domain = org.test
+source.dir = .
+source.include_exts = py,png,jpg,kv,atlas,txt,json
+version = 1.0
+requirements = python3==3.9.9,kivy==2.1.0,android
+orientation = portrait
+fullscreen = 0
+
+[buildozer]
+log_level = 1
+warn_on_root = 1
+
+[android]
+api = 33
+minapi = 21
+ndk = 25b
+p4a.branch = master
+android.arch = armeabi-v7a
+android.accept_sdk_license = True
+EOF
         fi
         
-    - name: Clean and build
-      id: build_step
-      continue-on-error: true
+    - name: Build with retry mechanism
+      id: build_apk
       run: |
         source venv/bin/activate
-        # Nettoyage complet pour éviter les erreurs
-        buildozer android clean 2>/dev/null || true
         
-        # Construction avec gestion des erreurs détaillée
-        echo "Début de la construction APK..."
-        set +e  # Désactive l'arrêt sur erreur
+        echo "=== CONFIGURATION INITIALE ==="
+        # Force un répertoire propre
+        export BUILDOZER_ROOT="/tmp/buildozer_${GITHUB_RUN_ID}"
+        mkdir -p $BUILDOZER_ROOT
         
-        # Premier essai
-        buildozer android debug 2>&1 | tee build.log
-        BUILD_EXIT_CODE=$?
-        
-        if [ $BUILD_EXIT_CODE -eq 0 ] && [ -f "bin/*.apk" ]; then
-          echo "Build réussi au premier essai"
-          exit 0
+        echo "=== PREMIÈRE TENTATIVE ==="
+        if buildozer -v android debug 2>&1 | tee build.log; then
+          echo "✅ Succès première tentative"
+        else
+          echo "⚠️ Première tentative échouée, nettoyage et réessai..."
+          
+          # Nettoyage agressif
+          rm -rf .buildozer
+          rm -rf ~/.buildozer
+          rm -rf /tmp/buildozer*
+          rm -rf /tmp/pip*
+          
+          # Réinitialisation complète
+          buildozer android clean 2>/dev/null || true
+          
+          echo "=== DEUXIÈME TENTATIVE ==="
+          if buildozer -v android debug 2>&1 | tee -a build.log; then
+            echo "✅ Succès deuxième tentative"
+          else
+            echo "❌ Échec après deux tentatives"
+            echo "=== ANALYSE DE L'ERREUR ==="
+            
+            # Cherche l'erreur spécifique
+            if grep -q "exit code 100" build.log; then
+              echo "PROBLÈME: Erreur 100 - Problème de permissions/cache"
+              echo "SOLUTION: Nettoyer manuellement les caches"
+            fi
+            
+            if grep -q "SDK license" build.log; then
+              echo "PROBLÈME: Licence SDK non acceptée"
+              echo "SOLUTION: Ajouter 'android.accept_sdk_license = True' dans buildozer.spec"
+            fi
+            
+            echo "=== LOG COMPLET DISPONIBLE DANS ARTIFACTS ==="
+            exit 1
+          fi
         fi
         
-        # Deuxième essai avec nettoyage plus agressif
-        echo "Premier essai échoué, nettoyage et réessai..."
-        rm -rf .buildozer/android/platform/build-*
-        rm -rf ~/.buildozer/android/platform/android-*
-        
-        buildozer android debug 2>&1 | tee -a build.log
-        BUILD_EXIT_CODE=$?
-        
-        if [ $BUILD_EXIT_CODE -eq 0 ] && [ -f "bin/*.apk" ]; then
-          echo "Build réussi au deuxième essai"
-          exit 0
+    - name: Verify APK
+      run: |
+        echo "=== VÉRIFICATION APK ==="
+        if ls bin/*.apk 1> /dev/null 2>&1; then
+          APK_FILE=$(ls bin/*.apk | head -1)
+          echo "APK généré: $(basename $APK_FILE)"
+          echo "Taille: $(du -h $APK_FILE | cut -f1)"
+          echo "APK_PATH=$APK_FILE" >> $GITHUB_ENV
         else
-          echo "Échec de la construction"
-          echo "=== Dernières 100 lignes du log ==="
-          tail -100 build.log
+          echo "❌ Aucun APK trouvé dans bin/"
+          ls -la bin/ || true
           exit 1
         fi
         
-    - name: Check for APK files
-      id: check_apk
-      run: |
-        if ls bin/*.apk 1> /dev/null 2>&1; then
-          echo "APK trouvé"
-          echo "apk_exists=true" >> $GITHUB_OUTPUT
-        else
-          echo "Aucun APK généré"
-          echo "apk_exists=false" >> $GITHUB_OUTPUT
-        fi
-        
-    - name: Upload APK
-      if: steps.check_apk.outputs.apk_exists == 'true'
+    - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: python-apk-${{ matrix.python-version }}
+        name: app-apk
         path: bin/*.apk
-        if-no-files-found: error
+        retention-days: 7
         
-    - name: Upload detailed logs on failure
-      if: failure()
+    - name: Upload build logs
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: failure-logs-${{ matrix.python-version }}
+        name: build-logs
         path: |
           build.log
-          .buildozer/android/platform/*/build.log
-        if-no-files-found: ignore
+          .buildozer/*.log
+        retention-days: 7
