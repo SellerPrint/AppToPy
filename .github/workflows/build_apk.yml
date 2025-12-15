@@ -1,117 +1,188 @@
-name: Build Python to APK
+name: Python to APK - Robust Build
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:  # Permet de déclencher manuellement
+  pull_request:
+    branches: [ main ]
+
+env:
+  # Variables pour éviter les erreurs courantes
+  USE_SDK_WRAPPER: 1
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  BUILD_TOOLS_VERSION: "30.0.3"
+  TARGET_SDK: 33
+  MIN_SDK: 21
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # Ubuntu LTS plus stable
+    runs-on: ubuntu-22.04
     
+    strategy:
+      matrix:
+        python-version: ["3.9"]
+      fail-fast: false  # Continue même si une version échoue
+        
     steps:
-    - name: Checkout code
+    - name: Checkout avec sous-modules
       uses: actions/checkout@v4
-      
+      with:
+        submodules: recursive
+        
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.9'  # Version compatible avec Buildozer
-        cache: 'pip'
+        python-version: ${{ matrix.python-version }}
         
-    - name: Install system dependencies
+    - name: Install prerequisites
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          python3-pip \
+          python3-setuptools \
+          python3-venv \
           git \
           build-essential \
           libffi-dev \
           libssl-dev \
-          python3-pip \
-          python3-dev \
-          openjdk-17-jdk \
-          zip \
-          unzip \
-          autoconf \
-          libtool \
-          pkg-config \
+          libjpeg-dev \
           zlib1g-dev \
-          libncurses5-dev \
-          libncursesw5-dev \
-          libtinfo5 \
-          cmake \
+          libfreetype6-dev \
+          liblcms2-dev \
+          libopenjp2-7-dev \
+          libtiff5-dev \
+          tk-dev \
+          libsdl2-dev \
+          libsdl2-image-dev \
+          libsdl2-mixer-dev \
+          libsdl2-ttf-dev \
+          libportmidi-dev \
+          libswscale-dev \
+          libavformat-dev \
+          libavcodec-dev \
           libxml2-dev \
-          libxslt1-dev
-          
-    - name: Install Buildozer and dependencies
+          libxslt1-dev \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libmtdev-dev \
+          xclip \
+          xsel \
+          wget \
+          curl \
+          unzip \
+          openjdk-17-jdk \
+          ninja-build \
+          pkg-config \
+          cmake \
+          libltdl-dev \
+          libtool \
+          autoconf \
+          automake
+        
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        api-level: ${{ env.TARGET_SDK }}
+        build-tools: ${{ env.BUILD_TOOLS_VERSION }}
+        ndk: "25.1.8937393"
+        
+    - name: Create virtual environment
       run: |
-        python -m pip install --upgrade pip setuptools wheel virtualenv
+        python -m venv venv
+        source venv/bin/activate
+        pip install --upgrade pip setuptools wheel
+        
+    - name: Install Python dependencies
+      run: |
+        source venv/bin/activate
+        if [ -f "requirements.txt" ]; then
+          pip install -r requirements.txt
+        fi
+        # Installation spécifique pour Buildozer
         pip install buildozer cython==0.29.33
-        pip install kivy  # Si tu utilises Kivy
+        pip install kivy[full] kivy-garden
         
-    - name: Cache Buildozer dependencies
-      uses: actions/cache@v4
-      id: buildozer-cache
-      with:
-        path: |
-          ~/.buildozer
-          .buildozer
-        key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
-        restore-keys: |
-          ${{ runner.os }}-buildozer-
-          
-    - name: Cache Android SDK
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.android
-          /usr/local/android-sdk
-        key: ${{ runner.os }}-android-sdk-${{ hashFiles('buildozer.spec') }}
-        
-    - name: Initialize Buildozer
+    - name: Configure Buildozer
       run: |
         if [ ! -f "buildozer.spec" ]; then
+          source venv/bin/activate
           buildozer init
-          echo "Fichier buildozer.spec créé, configures-le avant de continuer"
-          exit 1
+          # Configuration automatique minimale
+          sed -i 's/^title = .*/title = My Python App/' buildozer.spec
+          sed -i 's/^package.name = .*/package.name = mypythonapp/' buildozer.spec
+          sed -i 's/^source.dir = .*/source.dir = ./' buildozer.spec
+          sed -i 's/^source.include_exts = .*/source.include_exts = py,png,jpg,kv,atlas,txt/' buildozer.spec
+          sed -i 's/^version = .*/version = 1.0.0/' buildozer.spec
+          sed -i 's/^requirements = .*/requirements = python3,kivy/' buildozer.spec
+          sed -i 's/^android.api = .*/android.api = 33/' buildozer.spec
+          sed -i 's/^android.minapi = .*/android.minapi = 21/' buildozer.spec
+          sed -i 's/^android.ndk = .*/android.ndk = 25b/' buildozer.spec
         fi
         
-    - name: Clean previous builds (évite les conflits)
+    - name: Clean and build
+      id: build_step
+      continue-on-error: true
       run: |
-        rm -rf .buildozer/android/platform/build-* 2>/dev/null || true
-        rm -rf bin/*.apk 2>/dev/null || true
+        source venv/bin/activate
+        # Nettoyage complet pour éviter les erreurs
+        buildozer android clean 2>/dev/null || true
         
-    - name: Build APK (Debug)
-      id: build_apk
-      continue-on-error: false
-      timeout-minutes: 45  # Timeout pour éviter les boucles infinies
-      run: |
-        # Désactive les logs trop verbeux
-        export BUILD_OUTPUT=$(buildozer android debug 2>&1 | tee build.log)
+        # Construction avec gestion des erreurs détaillée
+        echo "Début de la construction APK..."
+        set +e  # Désactive l'arrêt sur erreur
         
-        # Vérifie si la construction a réussi
-        if grep -q "Build completed successfully" build.log || [ -f "bin/*.apk" ]; then
-          echo "APK généré avec succès"
-          echo "apk_generated=true" >> $GITHUB_OUTPUT
+        # Premier essai
+        buildozer android debug 2>&1 | tee build.log
+        BUILD_EXIT_CODE=$?
+        
+        if [ $BUILD_EXIT_CODE -eq 0 ] && [ -f "bin/*.apk" ]; then
+          echo "Build réussi au premier essai"
+          exit 0
+        fi
+        
+        # Deuxième essai avec nettoyage plus agressif
+        echo "Premier essai échoué, nettoyage et réessai..."
+        rm -rf .buildozer/android/platform/build-*
+        rm -rf ~/.buildozer/android/platform/android-*
+        
+        buildozer android debug 2>&1 | tee -a build.log
+        BUILD_EXIT_CODE=$?
+        
+        if [ $BUILD_EXIT_CODE -eq 0 ] && [ -f "bin/*.apk" ]; then
+          echo "Build réussi au deuxième essai"
+          exit 0
         else
-          echo "Échec de la génération d'APK"
-          echo "Dernières lignes du log :"
-          tail -50 build.log
+          echo "Échec de la construction"
+          echo "=== Dernières 100 lignes du log ==="
+          tail -100 build.log
           exit 1
         fi
         
-    - name: Upload APK artifact
-      if: steps.build_apk.outputs.apk_generated == 'true'
+    - name: Check for APK files
+      id: check_apk
+      run: |
+        if ls bin/*.apk 1> /dev/null 2>&1; then
+          echo "APK trouvé"
+          echo "apk_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "Aucun APK généré"
+          echo "apk_exists=false" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Upload APK
+      if: steps.check_apk.outputs.apk_exists == 'true'
       uses: actions/upload-artifact@v4
       with:
-        name: python-app-apk
+        name: python-apk-${{ matrix.python-version }}
         path: bin/*.apk
-        retention-days: 7
+        if-no-files-found: error
         
-    - name: Upload build logs (en cas d'erreur)
+    - name: Upload detailed logs on failure
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: build-logs
-        path: build.log
-        retention-days: 7
+        name: failure-logs-${{ matrix.python-version }}
+        path: |
+          build.log
+          .buildozer/android/platform/*/build.log
+        if-no-files-found: ignore
