@@ -1,81 +1,117 @@
-name: Build Android APK
+name: Build Python to APK
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
+  workflow_dispatch:  # Permet de déclencher manuellement
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-
+    runs-on: ubuntu-22.04  # Ubuntu LTS plus stable
+    
     steps:
-      # 1️⃣ Récupération du code
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # 2️⃣ Cache Buildozer (version NON dépréciée)
-      - name: Cache Buildozer
-        uses: actions/cache@v4
-        with:
-          path: |
-            .buildozer
-            ~/.buildozer
-          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
-
-      # 3️⃣ Dépendances système
-      - name: Install system dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            python3-pip python3-setuptools python3-wheel \
-            openjdk-17-jdk \
-            zip unzip git \
-            build-essential \
-            libffi-dev libssl-dev \
-            liblzma-dev zlib1g-dev \
-            libsqlite3-dev
-
-      # 4️⃣ Python
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.9"
-
-      # 5️⃣ Buildozer + Cython
-      - name: Install Buildozer
-        run: |
-          pip install --upgrade pip
-          pip install cython==0.29.36 buildozer
-
-      # 6️⃣ Vérification des fichiers essentiels
-      - name: Check project files
-        run: |
-          ls -la
-          test -f main.py
-          test -f buildozer.spec
-
-      # 7️⃣ Compilation APK
-      - name: Build APK
-        run: |
-          buildozer android clean
-          yes | buildozer -v android debug
-
-      # 8️⃣ Vérification APK
-      - name: Check APK
-        if: always()
-        run: |
-          if ls bin/*.apk 1> /dev/null 2>&1; then
-            echo "APK trouvé :"
-            ls -lh bin/*.apk
-          else
-            echo "⚠️ APK NON GÉNÉRÉ"
-            exit 1
-          fi
-
-      # 9️⃣ Upload APK
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-apk
-          path: bin/*.apk
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'  # Version compatible avec Buildozer
+        cache: 'pip'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          git \
+          build-essential \
+          libffi-dev \
+          libssl-dev \
+          python3-pip \
+          python3-dev \
+          openjdk-17-jdk \
+          zip \
+          unzip \
+          autoconf \
+          libtool \
+          pkg-config \
+          zlib1g-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          libtinfo5 \
+          cmake \
+          libxml2-dev \
+          libxslt1-dev
+          
+    - name: Install Buildozer and dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel virtualenv
+        pip install buildozer cython==0.29.33
+        pip install kivy  # Si tu utilises Kivy
+        
+    - name: Cache Buildozer dependencies
+      uses: actions/cache@v4
+      id: buildozer-cache
+      with:
+        path: |
+          ~/.buildozer
+          .buildozer
+        key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
+        restore-keys: |
+          ${{ runner.os }}-buildozer-
+          
+    - name: Cache Android SDK
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.android
+          /usr/local/android-sdk
+        key: ${{ runner.os }}-android-sdk-${{ hashFiles('buildozer.spec') }}
+        
+    - name: Initialize Buildozer
+      run: |
+        if [ ! -f "buildozer.spec" ]; then
+          buildozer init
+          echo "Fichier buildozer.spec créé, configures-le avant de continuer"
+          exit 1
+        fi
+        
+    - name: Clean previous builds (évite les conflits)
+      run: |
+        rm -rf .buildozer/android/platform/build-* 2>/dev/null || true
+        rm -rf bin/*.apk 2>/dev/null || true
+        
+    - name: Build APK (Debug)
+      id: build_apk
+      continue-on-error: false
+      timeout-minutes: 45  # Timeout pour éviter les boucles infinies
+      run: |
+        # Désactive les logs trop verbeux
+        export BUILD_OUTPUT=$(buildozer android debug 2>&1 | tee build.log)
+        
+        # Vérifie si la construction a réussi
+        if grep -q "Build completed successfully" build.log || [ -f "bin/*.apk" ]; then
+          echo "APK généré avec succès"
+          echo "apk_generated=true" >> $GITHUB_OUTPUT
+        else
+          echo "Échec de la génération d'APK"
+          echo "Dernières lignes du log :"
+          tail -50 build.log
+          exit 1
+        fi
+        
+    - name: Upload APK artifact
+      if: steps.build_apk.outputs.apk_generated == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-app-apk
+        path: bin/*.apk
+        retention-days: 7
+        
+    - name: Upload build logs (en cas d'erreur)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs
+        path: build.log
+        retention-days: 7
