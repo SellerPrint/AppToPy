@@ -1,86 +1,81 @@
-name: Android CI Build
+name: Build Android APK
 
 on:
   push:
-    branches: 
-      - main
-      - master
-  pull_request:
-    branches: 
-      - main
-      - master
-  workflow_dispatch:
+    branches: [ "main" ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 360
+
     steps:
+      # 1️⃣ Récupération du code
       - name: Checkout repository
         uses: actions/checkout@v4
-        
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+
+      # 2️⃣ Cache Buildozer (version NON dépréciée)
+      - name: Cache Buildozer
+        uses: actions/cache@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
-          
-      - name: Setup Gradle
-        uses: gradle/gradle-build-action@v2
-        with:
-          gradle-version: '8.2'
-          cache-disabled: true
-          
-      - name: Display Gradle version
-        run: gradle --version
-        
-      - name: List project structure
+          path: |
+            .buildozer
+            ~/.buildozer
+          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
+
+      # 3️⃣ Dépendances système
+      - name: Install system dependencies
         run: |
-          echo "Project structure:"
+          sudo apt update
+          sudo apt install -y \
+            python3-pip python3-setuptools python3-wheel \
+            openjdk-17-jdk \
+            zip unzip git \
+            build-essential \
+            libffi-dev libssl-dev \
+            liblzma-dev zlib1g-dev \
+            libsqlite3-dev
+
+      # 4️⃣ Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      # 5️⃣ Buildozer + Cython
+      - name: Install Buildozer
+        run: |
+          pip install --upgrade pip
+          pip install cython==0.29.36 buildozer
+
+      # 6️⃣ Vérification des fichiers essentiels
+      - name: Check project files
+        run: |
           ls -la
-          echo "---"
-          if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
-            echo "Root build file found"
-          fi
-          if [ -d "app" ]; then
-            echo "App directory found"
-            ls -la app/
-          fi
-          
-      - name: Clean project
-        run: gradle clean --stacktrace --info
-        continue-on-error: true
-        
-      - name: Build debug APK
-        run: gradle assembleDebug --stacktrace --info --debug
-        
-      - name: Verify APK creation
+          test -f main.py
+          test -f buildozer.spec
+
+      # 7️⃣ Compilation APK
+      - name: Build APK
+        run: |
+          buildozer android clean
+          yes | buildozer -v android debug
+
+      # 8️⃣ Vérification APK
+      - name: Check APK
         if: always()
         run: |
-          echo "Searching for APK files..."
-          find . -name "*.apk" -type f || echo "No APK files found"
-          echo "---"
-          echo "Build outputs directory:"
-          find . -path "*/build/outputs/*" -type f || echo "No build outputs found"
-          
-      - name: Upload debug APK
+          if ls bin/*.apk 1> /dev/null 2>&1; then
+            echo "APK trouvé :"
+            ls -lh bin/*.apk
+          else
+            echo "⚠️ APK NON GÉNÉRÉ"
+            exit 1
+          fi
+
+      # 9️⃣ Upload APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
-        if: success()
         with:
-          name: app-debug
-          path: |
-            app/build/outputs/apk/debug/*.apk
-            **/build/outputs/apk/debug/*.apk
-          if-no-files-found: warn
-          retention-days: 30
-          
-      - name: Upload build logs
-        uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: build-logs
-          path: |
-            **/build/reports/
-            **/build/outputs/logs/
-          if-no-files-found: ignore
-          retention-days: 7
+          name: android-apk
+          path: bin/*.apk
