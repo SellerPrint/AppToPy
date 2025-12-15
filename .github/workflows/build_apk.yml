@@ -1,12 +1,150 @@
-- name: Nuclear option - Fresh build
-  run: |
-    # Supprime TOUT
-    sudo rm -rf /tmp/*
-    rm -rf .buildozer ~/.buildozer
+name: Build Python APK - Fixed Syntax
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  BUILDOZER_HOME: /tmp/buildozer
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
     
-    # Installe tout en fresh
-    pip install --upgrade buildozer
-    
-    # Build avec force
-    buildozer android clean
-    yes | buildozer android debug 2>&1 | tee build.log
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Clean workspace
+      run: |
+        sudo rm -rf /tmp/buildozer* 2>/dev/null || true
+        rm -rf .buildozer 2>/dev/null || true
+        rm -rf ~/.buildozer 2>/dev/null || true
+        
+    - name: Setup Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install essential dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          python3-pip \
+          python3-dev \
+          build-essential \
+          git \
+          wget \
+          unzip \
+          openjdk-17-jdk \
+          zip \
+          libffi-dev \
+          libssl-dev \
+          libjpeg-dev \
+          zlib1g-dev \
+          autoconf \
+          libtool \
+          pkg-config
+        
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        api-level: 33
+        build-tools: 34.0.0
+        
+    - name: Create virtual environment
+      run: |
+        python -m venv venv
+        source venv/bin/activate
+        python -m pip install --upgrade pip setuptools wheel
+        
+    - name: Install Buildozer
+      run: |
+        source venv/bin/activate
+        pip install "buildozer==1.5.0"
+        pip install "cython==0.29.33"
+        pip install "kivy==2.1.0"
+        
+    - name: Create buildozer.spec if missing
+      run: |
+        if [ ! -f "buildozer.spec" ]; then
+          source venv/bin/activate
+          buildozer init
+          # Configure minimal settings
+          sed -i 's/^title = .*/title = MyApp/' buildozer.spec
+          sed -i 's/^package.name = .*/package.name = myapp/' buildozer.spec
+          sed -i 's/^requirements = .*/requirements = python3,kivy,android/' buildozer.spec
+          sed -i 's/^android.accept_sdk_license = .*/android.accept_sdk_license = True/' buildozer.spec || \
+          echo -e "\n[android]\nandroid.accept_sdk_license = True" >> buildozer.spec
+        fi
+        
+    - name: Build APK (with retry)
+      id: build_apk
+      run: |
+        source venv/bin/activate
+        
+        echo "=== CLEANING ==="
+        rm -rf .buildozer/android/platform/build-* 2>/dev/null || true
+        rm -rf bin/* 2>/dev/null || true
+        
+        echo "=== BUILD ATTEMPT 1 ==="
+        set +e
+        buildozer -v android debug 2>&1 | tee build.log
+        BUILD_STATUS=$?
+        set -e
+        
+        if [ $BUILD_STATUS -eq 0 ]; then
+          echo "✅ Build successful on first attempt"
+        else
+          echo "⚠️ First attempt failed (code: $BUILD_STATUS), cleaning and retrying..."
+          
+          # More aggressive cleanup
+          rm -rf .buildozer 2>/dev/null || true
+          rm -rf ~/.buildozer 2>/dev/null || true
+          
+          echo "=== BUILD ATTEMPT 2 ==="
+          set +e
+          buildozer -v android debug 2>&1 | tee -a build.log
+          BUILD_STATUS=$?
+          set -e
+          
+          if [ $BUILD_STATUS -eq 0 ]; then
+            echo "✅ Build successful on second attempt"
+          else
+            echo "❌ Build failed after 2 attempts"
+            echo "Last 30 lines of log:"
+            tail -30 build.log
+            exit 1
+          fi
+        fi
+        
+    - name: Verify APK
+      id: verify_apk
+      run: |
+        if find bin/ -name "*.apk" 2>/dev/null | grep -q .; then
+          APK_FILE=$(find bin/ -name "*.apk" | head -1)
+          echo "APK found: $APK_FILE"
+          echo "size=$(du -h "$APK_FILE" | cut -f1)" >> $GITHUB_OUTPUT
+          echo "path=$APK_FILE" >> $GITHUB_OUTPUT
+        else
+          echo "No APK found in bin/"
+          ls -la bin/ 2>/dev/null || echo "bin/ directory doesn't exist"
+          exit 1
+        fi
+        
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-app-apk
+        path: bin/*.apk
+        if-no-files-found: error
+        
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs
+        path: build.log
